@@ -1,87 +1,53 @@
 <?php
 session_start();
-$userlogin=$_SESSION['customer_login_user'];
-$servername="localhost";
-$username="root";
-$password="";
-$dbname="agriculture_portal";
+require_once "config.php";
+require_once "products.php";
 
-	//Create Connection 
-	$conn =mysqli_connect($servername, $username, $password, $dbname);
-	// Check connection
-	if ($conn->connect_error) {
-	die("Connection failed: " . $conn->connect_error);
-	}
+if (!isset($_SESSION['customer_login_user'])) {
+    header("Location: ../login.php");
+    exit();
+}
 
-	require_once "config.php";
+// Ensure cart total is available
+$totalCartPrice = isset($_SESSION['Total_Cart_Price']) ? $_SESSION['Total_Cart_Price'] : 0;
 
-	\Stripe\Stripe::setVerifySslCerts(false);
+// Convert price to paise (Stripe requires amount in the smallest currency unit)
+$totalAmount = $totalCartPrice * 100; 
 
-	// Token is created using Checkout or Elements!
-	// Get the payment token ID submitted by the form:
-	$productID = $_GET['id'];
-	$token = $_POST['stripeToken'];
-	$email = $_POST["stripeEmail"];
+if ($totalAmount <= 0) {
+    die("Error: Invalid cart total. Please add items to your cart.");
+}
 
+try {
+    // Create a dynamic product for checkout
+    $product = \Stripe\Product::create([
+        'name' => 'Cart Total Payment',
+        'description' => 'Payment for items in shopping cart'
+    ]);
 
-	if (!isset($_POST['stripeToken']) || !isset($products[$productID])) {
-		header("Location: ../cbuy_crops.php");
-		exit();
-	}
+    // Create a Stripe price object
+    $price = \Stripe\Price::create([
+        'product' => $product->id,
+        'unit_amount' => $totalAmount, // Ensure it's in paise
+        'currency' => 'inr',
+    ]);
 
+    // Create Stripe checkout session
+    $checkout_session = \Stripe\Checkout\Session::create([
+        'payment_method_types' => ['card'],
+        'line_items' => [[
+            'price' => $price->id,
+            'quantity' => 1,
+        ]],
+        'mode' => 'payment',
+        'success_url' => 'http://localhost/Agricultural-portal-main/customer/cupdatedb.php',
+        'cancel_url' => 'http://localhost/Agricultural-portal-main/customer/cbuy_crops.php',
+    ]);
 
-
-
-	//Customer Details Query
-	$customerquery="SELECT * from custlogin where email='".$userlogin."'";
-	$customerresult=mysqli_query($conn,$customerquery);
-
-
-	$row=mysqli_fetch_array($customerresult);
-	$Customername=$row['cust_name'];
-	$CustomerAddress = $row['address'];
-	$CustomerCity= $row['city'];
-	$CustomerPincode=$row['pincode'];
-	$CustomerState=$row['state'];
-	$CustomerPhone=$row['phone_no'];
-	$CustomerEmail=$row['email'];
-
-
-	
-
-	//Add customer to Stripe :
-	$customer =\Stripe\Customer::create(array(
-		'email' =>$CustomerEmail,
-		'source' =>$token,
-		'name'=> $Customername,
-		'description' => 'Customer Payment',
-		'address' => [
-			'line1' => $CustomerAddress,
-			'postal_code' => $CustomerPincode,
-			'city' => $CustomerCity,
-			'state' => $CustomerState,
-			'country' => 'IN',
-		  ],
-	));
-
-
-
-	// Charge the user's card:
-	$charge = \Stripe\Charge::create(array(
-		"customer" => $customer->id,
-		"amount" => $products[$productID]["price"],
-		"currency" => "inr",
-		"description" => $products[$productID]["title"],
-		"metadata" => array(
-			"order_id" => "1"
-		)
-	));
-
-
-
-	
-	header("location: ../cupdatedb.php");
-	//send an email
-	//store information to the database
-	
+    // Redirect to Stripe payment page
+    header("Location: " . $checkout_session->url);
+    exit();
+} catch (\Stripe\Exception\ApiErrorException $e) {
+    die("Stripe API error: " . $e->getMessage());
+}
 ?>
